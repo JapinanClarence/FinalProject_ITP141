@@ -1,0 +1,111 @@
+#!/bin/bash
+
+# Script Name: system_monitor.sh
+# Author: Rhosebrian Jamisola, Clarence Japinan, January Iverson Libutan, Jorge Magno
+# Date: 2024-12-14
+# Description: Monitors system resources, logs usage, sends alerts, and generates graphical reports.
+
+# Set thresholds for resource usage (in percentage)
+CPU_THRESHOLD=50
+MEM_THRESHOLD=50
+DISK_THRESHOLD=50
+
+# File paths
+LOG_FILE=~/FinalProject/system_monitor.csv
+GRAPH_FILE=~/FinalProject/resource_usage.png
+ALERT_EMAIL="rdjamisola21@gmail.com"
+
+# Ensure the log directory exists
+mkdir -p ~/FinalProject
+
+# Check dependencies
+for cmd in gnuplot msmtp bc; do
+    if ! command -v "$cmd" &> /dev/null; then
+        echo "Error: $cmd is not installed. Please install it before running the script." >&2
+        exit 1
+    fi
+done
+
+# Get current system stats
+CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
+MEM_USAGE=$(free | grep Mem | awk '{print $3/$2 * 100.0}')
+DISK_USAGE=$(df / | grep / | awk '{ print $5 }' | sed 's/%//')
+
+# Log resource usage with timestamp
+if [ ! -f "$LOG_FILE" ]; then
+    echo "Timestamp,CPU Usage (%),Memory Usage (%),Disk Usage (%)" > "$LOG_FILE"
+fi
+echo "$(date '+%Y-%m-%d %H:%M:%S'),$CPU_USAGE,$MEM_USAGE,$DISK_USAGE" >> "$LOG_FILE"
+
+# Prepare the alert message (only for exceeded thresholds)
+ALERT_MESSAGE=""
+
+# Checking for CPU usage exceed
+if (( $(echo "$CPU_USAGE > $CPU_THRESHOLD" | bc -l) )); then
+    ALERT_MESSAGE+="CPU usage is over threshold: $CPU_USAGE%\n"
+fi
+
+# Checking for Memory usage exceed
+if (( $(echo "$MEM_USAGE > $MEM_THRESHOLD" | bc -l) )); then
+    ALERT_MESSAGE+="Memory usage is over threshold: $MEM_USAGE%\n"
+fi
+
+# Checking for Disk usage exceed
+if (( $DISK_USAGE > $DISK_THRESHOLD )); then
+    ALERT_MESSAGE+="Disk usage is over threshold: $DISK_USAGE%\n"
+fi
+
+# If there are any alerts, send the email
+if [[ -n "$ALERT_MESSAGE" ]]; then
+    EMAIL_BODY="-------------------------------------------\n\n"
+    EMAIL_BODY+="SYSTEM RESOURCE ALERT\n"
+    EMAIL_BODY+="$ALERT_MESSAGE\n\n"
+    EMAIL_BODY+="------------------------------------------\n\n"
+    EMAIL_BODY+="THRESHOLD LIMIT\n"
+    EMAIL_BODY+="CPU threshold limit: $CPU_THRESHOLD%\n"
+    EMAIL_BODY+="Memory threshold limit: $MEM_THRESHOLD%\n"
+    EMAIL_BODY+="Disk threshold limit: $DISK_THRESHOLD%\n"
+    EMAIL_BODY+="------------------------------------------\n\n"
+    EMAIL_BODY+="CURRENT USAGE\n"
+    EMAIL_BODY+="CPU Usage: $CPU_USAGE%\n"
+    EMAIL_BODY+="Memory Usage: $MEM_USAGE%\n"
+    EMAIL_BODY+="Disk Usage: $DISK_USAGE%\n"
+    EMAIL_BODY+="------------------------------------------\n"
+
+    echo -e "Subject: System Resource Alert\n\n$EMAIL_BODY" | msmtp "$ALERT_EMAIL"
+fi
+
+# Generate the graph using gnuplot
+gnuplot <<- EOF
+    # Set the terminal to PNG
+    set terminal png size 800,600
+
+    # Set the output file for the graph
+    set output "$GRAPH_FILE"
+
+    # Set graph titles and labels
+    set title "CPU, Memory, and Disk Usage"
+    set xlabel "Time"
+    set xdata time
+    set timefmt "%Y-%m-%d %H:%M:%S"
+    set format x "%H:%M:%S"
+    set ylabel "Memory Usage (%)"
+    set y2label "CPU & Disk Usage (%)"
+    set grid
+
+    # Use two Y axes for Memory, CPU, and Disk usage
+    set y2tics
+    set ytics nomirror
+    set y2tics mirror
+
+    # Ensure CSV is read properly and specify the correct separator
+    set datafile separator ","
+
+    # Plot the data from the CSV file
+    plot "$LOG_FILE" using 1:3 with lines title "Memory Usage" axis x1y1 linecolor rgb "blue", \
+         "$LOG_FILE" using 1:2 with lines title "CPU Usage" axis x1y2 linecolor rgb "red", \
+         "$LOG_FILE" using 1:4 with lines title "Disk Usage" axis x1y2 linecolor rgb "green"
+EOF
+
+# Final output message
+echo "System monitoring completed. Log: $LOG_FILE | Graph: $GRAPH_FILE"
